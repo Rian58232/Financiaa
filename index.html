@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <meta name="theme-color" content="#0b0d12" />
+  <title>Meu Controle</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Navegação principal">
+      <div class="brand"><span class="brand-mark">M</span><span>Meu Controle</span></div>
+      <nav>
+        <button class="nav-item active" data-view="home">⌂ <span>Início</span></button>
+        <button class="nav-item" data-view="history">↺ <span>Histórico</span></button>
+        <button class="nav-item" data-view="cards">▣ <span>Cartões</span></button>
+        <button class="nav-item" data-view="bills">◷ <span>Contas</span></button>
+        <button class="nav-item" data-view="calendar">▦ <span>Calendário</span></button>
+      </nav>
+      <button id="resetDemo" class="ghost small sidebar-bottom">Limpar meus dados</button>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="greeting">Boa noite</p>
+          <h1 id="viewTitle">Meu dinheiro</h1>
+        </div>
+        <div class="topbar-actions">
+          <button id="notificationsBtn" class="notification-btn" aria-label="Notificações" title="Notificações">
+            <span aria-hidden="true">♢</span><b id="notificationBadge" class="notification-badge hidden">0</b>
+          </button>
+          <button id="quickAddTop" class="primary desktop-only">+ Adicionar</button>
+        </div>
+      </header>
+
+      <section id="view-home" class="view active">
+        <div class="hero-card">
+          <div>
+            <span class="muted">Saldo atual</span>
+            <strong id="balanceValue" class="hero-value">R$ 0,00</strong>
+            <span id="monthLabel" class="soft-pill">Este mês</span>
+          </div>
+          <div class="hero-actions">
+            <button class="primary" data-open="expense">− Gasto</button>
+            <button class="secondary" data-open="income">+ Entrada</button>
+          </div>
+        </div>
+
+        <div id="overdueBanner" class="alert-card hidden"></div>
+
+        <div class="summary-grid">
+          <article class="metric-card"><span>Entrou</span><strong id="incomeMonth">R$ 0,00</strong><small>no mês</small></article>
+          <article class="metric-card"><span>Saiu</span><strong id="expenseMonth">R$ 0,00</strong><small>no mês</small></article>
+          <article class="metric-card"><span>Sobra</span><strong id="monthNet">R$ 0,00</strong><small>entradas − saídas</small></article>
+        </div>
+
+        <div class="section-head"><div><p class="eyebrow">Próximos dias</p><h2>Próximos pagamentos</h2></div><button class="text-btn" data-view="bills">Ver todos</button></div>
+        <div id="upcomingList" class="stack-list"></div>
+
+        <div class="chart-grid">
+          <article class="panel chart-panel">
+            <div class="panel-head"><div><p class="eyebrow">Fluxo</p><h2>Entradas x saídas</h2></div><span class="legend-note">6 meses</span></div>
+            <canvas id="cashflowChart" width="720" height="320" aria-label="Gráfico de entradas e saídas"></canvas>
+          </article>
+          <article class="panel chart-panel">
+            <div class="panel-head"><div><p class="eyebrow">Categorias</p><h2>Onde gastei</h2></div><span class="legend-note">este mês</span></div>
+            <canvas id="categoryChart" width="720" height="320" aria-label="Gráfico de gastos por categoria"></canvas>
+          </article>
+          <article class="panel chart-panel">
+            <div class="panel-head"><div><p class="eyebrow">Pagamento</p><h2>Como eu paguei</h2></div><span class="legend-note">este mês</span></div>
+            <canvas id="paymentChart" width="720" height="320" aria-label="Gráfico por forma de pagamento"></canvas>
+          </article>
+        </div>
+
+        <div class="section-head"><div><p class="eyebrow">Agora</p><h2>Últimas movimentações</h2></div><button class="text-btn" data-view="history">Histórico</button></div>
+        <div id="recentTransactions" class="stack-list"></div>
+      </section>
+
+      <section id="view-history" class="view">
+        <div class="toolbar-card">
+          <input id="searchInput" class="search" placeholder="Pesquisar movimentações..." />
+          <div class="chip-row" id="historyFilters">
+            <button class="chip active" data-filter="all">Tudo</button>
+            <button class="chip" data-filter="income">Entradas</button>
+            <button class="chip" data-filter="expense">Saídas</button>
+            <button class="chip" data-filter="Pix">Pix</button>
+            <button class="chip" data-filter="Cartão">Cartão</button>
+            <button class="chip" data-filter="Dinheiro">Dinheiro</button>
+          </div>
+        </div>
+        <div id="historyList" class="stack-list roomy"></div>
+      </section>
+
+      <section id="view-cards" class="view">
+        <div class="section-head"><div><p class="eyebrow">Sem burocracia</p><h2>Meus cartões</h2></div><button class="primary" id="addCardBtn">+ Cartão</button></div>
+        <div id="cardsGrid" class="cards-grid"></div>
+      </section>
+
+      <section id="view-bills" class="view">
+        <div class="section-head"><div><p class="eyebrow">Contas</p><h2>O que ainda falta pagar</h2></div><button class="primary" data-open="bill">+ Conta</button></div>
+        <div class="chip-row bill-filter-row">
+          <button class="chip active" data-bill-filter="all">Todas</button>
+          <button class="chip" data-bill-filter="pending">Pendentes</button>
+          <button class="chip" data-bill-filter="overdue">Vencidas</button>
+          <button class="chip" data-bill-filter="paid">Pagas</button>
+        </div>
+        <div id="billStatusSummary" class="summary-grid compact"></div>
+        <div id="billsList" class="stack-list roomy"></div>
+      </section>
+
+      <section id="view-calendar" class="view">
+        <div class="panel calendar-panel">
+          <div class="panel-head">
+            <button id="prevMonth" class="icon-btn">‹</button>
+            <div class="calendar-title"><p class="eyebrow">Calendário financeiro</p><h2 id="calendarMonth"></h2></div>
+            <button id="nextMonth" class="icon-btn">›</button>
+          </div>
+          <div class="weekday-row"><span>DOM</span><span>SEG</span><span>TER</span><span>QUA</span><span>QUI</span><span>SEX</span><span>SÁB</span></div>
+          <div id="calendarGrid" class="calendar-grid"></div>
+        </div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Navegação mobile">
+      <button class="bottom-item active" data-view="home"><span>⌂</span><small>Início</small></button>
+      <button class="bottom-item" data-view="history"><span>↺</span><small>Histórico</small></button>
+      <button id="fab" class="fab" aria-label="Adicionar movimentação">+</button>
+      <button class="bottom-item" data-view="cards"><span>▣</span><small>Cartões</small></button>
+      <button class="bottom-item" data-view="bills"><span>◷</span><small>Contas</small></button>
+    </nav>
+  </div>
+
+  <div id="sheetBackdrop" class="backdrop hidden"></div>
+  <section id="quickSheet" class="bottom-sheet hidden" aria-modal="true" role="dialog">
+    <div class="sheet-grabber"></div>
+    <h3>Adicionar</h3>
+    <button class="sheet-option" data-open="expense"><span>−</span><div><strong>Adicionar gasto</strong><small>Pix, cartão, dinheiro...</small></div></button>
+    <button class="sheet-option" data-open="income"><span>+</span><div><strong>Adicionar entrada</strong><small>Salário, Pix recebido...</small></div></button>
+    <button class="sheet-option" data-open="bill"><span>◷</span><div><strong>Adicionar conta</strong><small>Internet, faculdade...</small></div></button>
+  </section>
+
+  <dialog id="entryDialog" class="modal">
+    <form id="entryForm" method="dialog">
+      <div class="modal-head"><div><p class="eyebrow" id="entryEyebrow">Nova movimentação</p><h2 id="entryTitle">Adicionar gasto</h2></div><button type="button" class="icon-btn" data-close>×</button></div>
+      <input type="hidden" id="entryType" value="expense" />
+      <label class="money-field"><span>Valor</span><div><b>R$</b><input id="entryAmount" inputmode="decimal" placeholder="0,00" required /></div></label>
+      <label>Descrição<input id="entryDescription" placeholder="Ex.: Mercado" required /></label>
+      <div id="expenseFields">
+        <label>Como paguei?
+          <div class="segmented" id="paymentOptions">
+            <button type="button" data-payment="Pix" class="active">Pix</button><button type="button" data-payment="Cartão">Cartão</button><button type="button" data-payment="Dinheiro">Dinheiro</button><button type="button" data-payment="Débito">Débito</button><button type="button" data-payment="Outro">Outro</button>
+          </div>
+        </label>
+        <label id="cardSelectWrap" class="hidden">Qual cartão?<select id="entryCard"></select></label>
+        <label>Categoria<select id="entryCategory"><option value="">Sem categoria</option></select></label>
+        <label class="check-row"><input type="checkbox" id="installmentToggle" /> <span>Parcelado?</span></label>
+        <label id="installmentWrap" class="hidden">Quantas vezes?<select id="installmentCount"><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>10</option><option>12</option></select></label>
+      </div>
+      <label>Data<input id="entryDate" type="date" required /></label>
+      <div class="modal-actions"><button type="button" class="secondary" data-close>Cancelar</button><button class="primary" value="default">Salvar</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="billDialog" class="modal">
+    <form id="billForm" method="dialog">
+      <div class="modal-head"><div><p class="eyebrow">Conta</p><h2>Adicionar conta</h2></div><button type="button" class="icon-btn" data-close>×</button></div>
+      <label class="money-field"><span>Valor</span><div><b>R$</b><input id="billAmount" inputmode="decimal" placeholder="0,00" required /></div></label>
+      <label>Descrição<input id="billDescription" placeholder="Ex.: Internet" required /></label>
+      <label>Vence em<input id="billDueDate" type="date" required /></label>
+      <label class="check-row"><input type="checkbox" id="billRecurring" /> <span>Repetir todo mês</span></label>
+      <div class="modal-actions"><button type="button" class="secondary" data-close>Cancelar</button><button class="primary">Salvar</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="cardDialog" class="modal">
+    <form id="cardForm" method="dialog">
+      <div class="modal-head"><div><p class="eyebrow">Cartão simples</p><h2>Adicionar cartão</h2></div><button type="button" class="icon-btn" data-close>×</button></div>
+      <label>Nome<input id="cardName" placeholder="Ex.: Cartão Roxo" required /></label>
+      <label class="money-field"><span>Limite <small>(opcional)</small></span><div><b>R$</b><input id="cardLimit" inputmode="decimal" placeholder="0,00" /></div></label>
+      <div class="two-cols"><label>Fecha dia<input id="cardCloseDay" type="number" min="1" max="31" placeholder="20" required /></label><label>Vence dia<input id="cardDueDay" type="number" min="1" max="31" placeholder="27" required /></label></div>
+      <div class="modal-actions"><button type="button" class="secondary" data-close>Cancelar</button><button class="primary">Salvar</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="notificationsDialog" class="modal small-modal">
+    <div class="modal-head"><div><p class="eyebrow">Avisos</p><h2>Notificações</h2></div><button type="button" class="icon-btn" data-close>×</button></div>
+    <div id="notificationsBody"></div>
+    <div class="notification-settings">
+      <div><strong>Notificações do aparelho</strong><small id="notificationPermissionText">Opcional</small></div>
+      <button id="browserNotificationsToggle" class="secondary" type="button">Ativar</button>
+    </div>
+  </dialog>
+
+  <dialog id="editDialog" class="modal small-modal">
+    <div class="modal-head"><div><p class="eyebrow">Movimentação</p><h2 id="editTitle">Detalhes</h2></div><button type="button" class="icon-btn" data-close>×</button></div>
+    <div id="editBody"></div>
+  </dialog>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>
