@@ -1,6 +1,10 @@
 const KEY='meu-controle-v1';
 const NOTIFY_KEY='meu-controle-browser-notifications';
 const NOTIFIED_KEY='meu-controle-notified-v1';
+const SUPABASE_URL='https://qbvaltltzjmryemxvasm.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY='sb_publishable_2D_tPBDk171ltFsCaenQBg_LyiYmLmN';
+const supabaseClient=window.supabase?.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+let cloudUser=null,cloudSaveTimer=null,cloudPollTimer=null,cloudChannel=null,lastCloudUpdatedAt='',lastLocalMutationAt=0,cloudDirty=false,cloudSaving=false;
 const categories=['Alimentação','Faculdade','Transporte','Lazer','Jogos','Casa','Contas','Saúde','Compras','Outros'];
 const brl=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'});
 const fmt=v=>brl.format((Number(v)||0)/100);
@@ -13,11 +17,103 @@ const shortDate=s=>new Date(s+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-di
 let state=load();
 let historyFilter='all', billFilter='all', calendarCursor=new Date();
 
-function load(){
-  try{const x=JSON.parse(localStorage.getItem(KEY)); if(x){x.paidInvoices=x.paidInvoices||[];return x;}}catch{}
-  return {transactions:[],cards:[],bills:[],paidInvoices:[],categories:[...categories]};
+function blankState(){return {transactions:[],cards:[],bills:[],paidInvoices:[],categories:[...categories]}}
+function normalizeState(x){
+  const base=blankState();
+  if(!x||typeof x!=='object')return base;
+  return {
+    transactions:Array.isArray(x.transactions)?x.transactions:[],
+    cards:Array.isArray(x.cards)?x.cards:[],
+    bills:Array.isArray(x.bills)?x.bills:[],
+    paidInvoices:Array.isArray(x.paidInvoices)?x.paidInvoices:[],
+    categories:Array.isArray(x.categories)&&x.categories.length?x.categories:[...categories]
+  };
 }
-function save(){localStorage.setItem(KEY,JSON.stringify(state)); renderAll();}
+function load(){
+  try{const x=JSON.parse(localStorage.getItem(KEY));if(x)return normalizeState(x)}catch{}
+  return blankState();
+}
+function persistLocal(){localStorage.setItem(KEY,JSON.stringify(state))}
+function save(){persistLocal();lastLocalMutationAt=Date.now();cloudDirty=true;renderAll();queueCloudSave();}
+function setSyncStatus(mode,text){
+  const el=document.querySelector('#syncStatus');if(!el)return;
+  el.dataset.mode=mode;el.textContent=text||({online:'Sincronizado',syncing:'Sincronizando',offline:'Sem internet',error:'Falha ao sincronizar'}[mode]||'Nuvem');
+}
+function showAuthGate(show=true){const gate=document.querySelector('#authGate');if(gate)gate.classList.toggle('hidden',!show)}
+function setAuthMessage(msg='',error=false){const el=document.querySelector('#authMessage');if(!el)return;el.textContent=msg;el.classList.toggle('error',!!error)}
+async function pullCloudState(force=false){
+  if(!supabaseClient||!cloudUser||!navigator.onLine)return;
+  if(!force&&(cloudSaving||cloudDirty||Date.now()-lastLocalMutationAt<1200))return;
+  try{
+    const {data,error}=await supabaseClient.from('app_state').select('data,updated_at').eq('user_id',cloudUser.id).maybeSingle();
+    if(error)throw error;
+    if(!data){await pushCloudState(true);return}
+    const stamp=data.updated_at||'';
+    if(force||!lastCloudUpdatedAt||stamp>lastCloudUpdatedAt){state=normalizeState(data.data);persistLocal();lastCloudUpdatedAt=stamp;renderAll()}
+    setSyncStatus('online','Sincronizado');
+  }catch(err){console.error('Cloud pull failed',err);setSyncStatus(navigator.onLine?'error':'offline')}
+}
+async function pushCloudState(force=false){
+  if(!supabaseClient||!cloudUser||!navigator.onLine||cloudSaving)return;
+  if(!force&&!cloudDirty)return;
+  cloudSaving=true;setSyncStatus('syncing','Sincronizando…');
+  try{
+    const payload={user_id:cloudUser.id,data:state,updated_at:new Date().toISOString()};
+    const {data,error}=await supabaseClient.from('app_state').upsert(payload,{onConflict:'user_id'}).select('updated_at').single();
+    if(error)throw error;
+    cloudDirty=false;lastCloudUpdatedAt=data?.updated_at||payload.updated_at;setSyncStatus('online','Sincronizado');
+  }catch(err){console.error('Cloud save failed',err);cloudDirty=true;setSyncStatus(navigator.onLine?'error':'offline')}
+  finally{cloudSaving=false}
+}
+function queueCloudSave(){clearTimeout(cloudSaveTimer);cloudSaveTimer=setTimeout(()=>pushCloudState(),350)}
+function stopCloudSync(){clearInterval(cloudPollTimer);cloudPollTimer=null;if(cloudChannel&&supabaseClient){supabaseClient.removeChannel(cloudChannel).catch(()=>{});cloudChannel=null}}
+function startCloudSync(){
+  stopCloudSync();
+  cloudPollTimer=setInterval(()=>{if(cloudDirty)pushCloudState();else pullCloudState()},5000);
+  try{
+    cloudChannel=supabaseClient.channel(`app-state-${cloudUser.id}`).on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_state',filter:`user_id=eq.${cloudUser.id}`},payload=>{
+      const stamp=payload.new?.updated_at||'';
+      if(stamp&&stamp!==lastCloudUpdatedAt&&!cloudDirty&&Date.now()-lastLocalMutationAt>800){state=normalizeState(payload.new.data);lastCloudUpdatedAt=stamp;persistLocal();renderAll();setSyncStatus('online','Atualizado')}
+    }).subscribe();
+  }catch{}
+}
+async function loadCloudForUser(user){
+  cloudUser=user;showAuthGate(false);document.querySelector('#accountBtn')?.classList.remove('hidden');
+  const email=document.querySelector('#accountEmail');if(email)email.textContent=user.email||'Conta conectada';
+  setSyncStatus('syncing','Carregando…');
+  try{
+    const {data,error}=await supabaseClient.from('app_state').select('data,updated_at').eq('user_id',user.id).maybeSingle();
+    if(error)throw error;
+    if(data){state=normalizeState(data.data);lastCloudUpdatedAt=data.updated_at||'';cloudDirty=false;persistLocal();renderAll()}
+    else{cloudDirty=true;await pushCloudState(true)}
+    startCloudSync();setSyncStatus('online','Sincronizado');
+  }catch(err){console.error(err);setSyncStatus('error','Erro na nuvem');toast('Não consegui carregar a nuvem agora. Seus dados locais continuam salvos.')}
+}
+async function initCloud(){
+  if(!supabaseClient){showAuthGate(true);setAuthMessage('Não foi possível carregar a conexão com a nuvem.',true);return}
+  const {data:{session}}=await supabaseClient.auth.getSession();
+  if(session?.user)await loadCloudForUser(session.user);else{showAuthGate(true);setSyncStatus('offline','Entrar para sincronizar')}
+  supabaseClient.auth.onAuthStateChange((_event,session)=>{if(session?.user&&session.user.id!==cloudUser?.id)loadCloudForUser(session.user);if(!session?.user){cloudUser=null;stopCloudSync();showAuthGate(true);document.querySelector('#accountBtn')?.classList.add('hidden');setSyncStatus('offline','Entrar para sincronizar')}})
+}
+async function signIn(){
+  const email=document.querySelector('#authEmail').value.trim(),password=document.querySelector('#authPassword').value;
+  if(!email||!password)return setAuthMessage('Digite e-mail e senha.',true);
+  setAuthMessage('Entrando…');
+  const {error}=await supabaseClient.auth.signInWithPassword({email,password});
+  if(error)setAuthMessage(error.message==='Invalid login credentials'?'E-mail ou senha incorretos.':error.message,true);else setAuthMessage('');
+}
+async function signUp(){
+  const email=document.querySelector('#authEmail').value.trim(),password=document.querySelector('#authPassword').value;
+  if(!email||password.length<6)return setAuthMessage('Use um e-mail válido e senha com pelo menos 6 caracteres.',true);
+  setAuthMessage('Criando conta…');
+  const {data,error}=await supabaseClient.auth.signUp({email,password});
+  if(error)return setAuthMessage(error.message,true);
+  if(data.session)setAuthMessage('Conta criada. Entrando…');else setAuthMessage('Conta criada. Confirme o e-mail e depois toque em Entrar.');
+}
+async function signOut(){
+  if(!supabaseClient)return;
+  await pushCloudState();await supabaseClient.auth.signOut();stopCloudSync();cloudUser=null;lastCloudUpdatedAt='';cloudDirty=false;localStorage.removeItem(KEY);state=blankState();renderAll();document.querySelector('#accountDialog')?.close();showAuthGate(true);setSyncStatus('offline','Entrar para sincronizar');
+}
 function uid(){return crypto?.randomUUID?.() || String(Date.now()+Math.random())}
 function toast(msg){const t=document.querySelector('#toast');t.textContent=msg;t.classList.remove('hidden');setTimeout(()=>t.classList.add('hidden'),1700)}
 function toDate(s){return new Date(s+'T12:00:00')}
@@ -116,7 +212,7 @@ async function enableBrowserNotifications(){
 async function showSystemNotification(title,body){
   try{
     if('serviceWorker' in navigator){
-      const reg=await navigator.serviceWorker.ready;await reg.showNotification(title,{body,icon:'',tag:title,renotify:false});return;
+      const reg=await navigator.serviceWorker.ready;await reg.showNotification(title,{body,icon:'./icons/icon-192.png',badge:'./icons/icon-192.png',tag:title,renotify:false});return;
     }
     new Notification(title,{body});
   }catch{}
@@ -203,14 +299,23 @@ document.addEventListener('click',e=>{const open=e.target.closest('[data-open]')
 fab.addEventListener('click',openSheet);quickAddTop.addEventListener('click',openSheet);sheetBackdrop.addEventListener('click',closeSheet);addCardBtn.addEventListener('click',()=>cardDialog.showModal());
 notificationsBtn.addEventListener('click',()=>{renderNotifications();notificationsDialog.showModal()});
 browserNotificationsToggle.addEventListener('click',enableBrowserNotifications);
+document.querySelector('#authLoginBtn')?.addEventListener('click',signIn);
+document.querySelector('#authSignupBtn')?.addEventListener('click',signUp);
+document.querySelector('#authPassword')?.addEventListener('keydown',e=>{if(e.key==='Enter')signIn()});
+document.querySelector('#accountBtn')?.addEventListener('click',()=>document.querySelector('#accountDialog')?.showModal());
+document.querySelector('#logoutBtn')?.addEventListener('click',signOut);
+window.addEventListener('online',()=>{setSyncStatus('syncing','Reconectando…');cloudDirty?pushCloudState():pullCloudState(true)});
+window.addEventListener('offline',()=>setSyncStatus('offline','Sem internet'));
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&cloudUser)pullCloudState(true)});
 searchInput.addEventListener('input',renderHistory);
 historyFilters.addEventListener('click',e=>{if(!e.target.dataset.filter)return;historyFilter=e.target.dataset.filter;historyFilters.querySelectorAll('.chip').forEach(x=>x.classList.toggle('active',x===e.target));renderHistory()});
 document.querySelector('.bill-filter-row').addEventListener('click',e=>{if(!e.target.dataset.billFilter)return;billFilter=e.target.dataset.billFilter;document.querySelectorAll('[data-bill-filter]').forEach(x=>x.classList.toggle('active',x===e.target));renderBills()});
 paymentOptions.addEventListener('click',e=>{if(!e.target.dataset.payment)return;paymentOptions.querySelectorAll('button').forEach(b=>b.classList.toggle('active',b===e.target));cardSelectWrap.classList.toggle('hidden',e.target.dataset.payment!=='Cartão')});
 installmentToggle.addEventListener('change',()=>installmentWrap.classList.toggle('hidden',!installmentToggle.checked));
 prevMonth.addEventListener('click',()=>{calendarCursor.setMonth(calendarCursor.getMonth()-1);renderCalendar()});nextMonth.addEventListener('click',()=>{calendarCursor.setMonth(calendarCursor.getMonth()+1);renderCalendar()});
-resetDemo.addEventListener('click',()=>{if(confirm('Limpar todos os dados salvos neste navegador?')){localStorage.removeItem(KEY);state=load();renderAll();toast('Dados apagados.')}});
+resetDemo.addEventListener('click',()=>{if(confirm('Limpar todos os dados sincronizados desta conta?')){state=blankState();save();toast('Dados apagados.')}});
 window.addEventListener('resize',()=>{clearTimeout(window.__chartTimer);window.__chartTimer=setTimeout(drawCharts,120)});
 if('serviceWorker' in navigator){navigator.serviceWorker.register('./service-worker.js').catch(()=>{});}
 
 renderAll();
+initCloud();

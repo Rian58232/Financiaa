@@ -4,10 +4,30 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
   <meta name="theme-color" content="#0b0d12" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Meu Controle" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <title>Meu Controle</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <div id="authGate" class="auth-gate">
+    <div class="auth-card">
+      <div class="auth-logo">M</div>
+      <p class="eyebrow">MEU CONTROLE</p>
+      <h1>Seu dinheiro, nos dois celulares.</h1>
+      <p class="auth-copy">Entre com a mesma conta nos aparelhos que devem compartilhar os gastos.</p>
+      <label>E-mail<input id="authEmail" type="email" autocomplete="email" placeholder="voce@email.com" /></label>
+      <label>Senha<input id="authPassword" type="password" autocomplete="current-password" placeholder="••••••••" /></label>
+      <p id="authMessage" class="auth-message"></p>
+      <button id="authLoginBtn" class="primary auth-main" type="button">Entrar</button>
+      <button id="authSignupBtn" class="secondary auth-main" type="button">Criar conta</button>
+      <small class="auth-hint">Para vocês verem exatamente os mesmos dados, usem este mesmo login nos dois celulares.</small>
+    </div>
+  </div>
   <div class="app-shell">
     <aside class="sidebar" aria-label="Navegação principal">
       <div class="brand"><span class="brand-mark">M</span><span>Meu Controle</span></div>
@@ -28,6 +48,8 @@
           <h1 id="viewTitle">Meu dinheiro</h1>
         </div>
         <div class="topbar-actions">
+          <span id="syncStatus" class="sync-status" data-mode="offline">Entrar para sincronizar</span>
+          <button id="accountBtn" class="notification-btn hidden" aria-label="Minha conta" title="Minha conta"><span aria-hidden="true">☁</span></button>
           <button id="notificationsBtn" class="notification-btn" aria-label="Notificações" title="Notificações">
             <span aria-hidden="true">♢</span><b id="notificationBadge" class="notification-badge hidden">0</b>
           </button>
@@ -198,7 +220,17 @@
     <div id="editBody"></div>
   </dialog>
 
+  <dialog id="accountDialog" class="modal small-modal">
+    <div class="modal-head"><div><p class="eyebrow">NUVEM</p><h2>Conta conectada</h2></div><button type="button" class="icon-btn" data-close>×</button></div>
+    <div class="account-body">
+      <div class="detail-box"><span>Login</span><strong id="accountEmail">Conta conectada</strong></div>
+      <p class="account-note">Use este mesmo login no outro celular para os dois enxergarem os mesmos dados.</p>
+      <button id="logoutBtn" class="danger-btn" type="button">Sair desta conta</button>
+    </div>
+  </dialog>
+
   <div id="toast" class="toast hidden"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="app.js"></script>
 </body>
 </html>

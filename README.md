@@ -1,38 +1,43 @@
-# Meu Controle Financeiro
+# Meu Controle Financeiro — sincronizado
 
-Site pessoal, mobile-first, para controlar entradas, saídas, Pix, dinheiro, cartões simplificados, contas e faturas.
+Site/PWA pessoal para entradas, saídas, Pix, dinheiro, cartões simplificados, limite, faturas, contas, vencimentos, gráficos e notificações.
 
-## Rodar
+## O que já está configurado
 
-Abra `index.html` por um servidor local ou publique os arquivos no GitHub Pages.
+- Supabase conectado com a **Publishable key** do projeto (segura para uso no navegador com RLS).
+- Nada de `sb_secret`, `service_role`, senha de banco ou número real de cartão no código.
+- Dados locais continuam em `localStorage` como cache/offline.
+- Dados da conta são sincronizados com `public.app_state` no Supabase.
+- O app tenta atualizar entre aparelhos automaticamente a cada poucos segundos e também ao voltar para a tela.
+- PWA com manifest, service worker e ícones para adicionar à tela inicial.
 
-## Cartões
+## Como usar em dois celulares
 
-O cadastro pede somente:
-- nome/apelido;
-- limite opcional;
-- dia de fechamento;
-- dia de vencimento.
+1. Publique esta pasta no GitHub Pages.
+2. Abra o link no primeiro celular.
+3. Crie uma conta no próprio app com e-mail e senha.
+4. Se o Supabase pedir confirmação de e-mail, confirme e volte ao app.
+5. No segundo celular, abra o mesmo link e **entre com o mesmo e-mail e senha**.
+6. Os dois aparelhos passam a usar o mesmo conjunto de dados.
 
-Nenhum número real de cartão, CVV, agência ou dado bancário é usado.
+> Esta versão usa um login compartilhado porque é a forma mais simples. No futuro dá para evoluir para duas contas diferentes ligadas à mesma carteira compartilhada.
 
-O limite considera como comprometidas as compras/faturas do cartão que ainda não foram marcadas como pagas. Parcelas futuras também entram no valor comprometido.
+## Instalar como app
+
+No Android/Chrome, abra o site publicado e use **Adicionar à tela inicial / Instalar app**. O app abre em modo standalone, sem precisar de APK ou Play Store.
+
+## GitHub Pages
+
+Suba **todos** estes arquivos e pastas para o repositório. Depois vá em:
+
+`Settings -> Pages -> Deploy from a branch -> main / root`
+
+O GitHub fornecerá o link público.
 
 ## Notificações
 
-O sino no topo mostra avisos de:
-- contas vencidas;
-- contas vencendo em até 3 dias;
-- faturas vencidas;
-- faturas vencendo em até 3 dias;
-- cartão a partir de 80% do limite.
+O sino dentro do app mostra avisos de contas/faturas e limite. Notificações do aparelho podem ser ativadas pelo usuário. Avisos com o site completamente fechado exigiriam push/backend adicional; esta versão não depende disso.
 
-As notificações do navegador são opcionais. Em HTTPS (como GitHub Pages) ou localhost, o usuário pode conceder permissão. Esta versão dispara avisos quando o site está carregado/visitado. Notificação push com o site completamente fechado exige um serviço de push/backend.
+## Segurança
 
-## IMPORTANTE — GitHub Pages não sincroniza dados sozinho
-
-Os dados desta versão ficam em `localStorage`. Publicar no GitHub Pages hospeda o site, mas cada celular/computador terá seu próprio armazenamento.
-
-Para duas ou mais pessoas verem os mesmos dados em tempo real, conecte o site a um banco na nuvem. Uma opção simples é Supabase (banco + login + realtime). O ideal é criar uma carteira compartilhada para que cada pessoa tenha seu próprio login, mas ambas vejam o mesmo conjunto de dados.
-
-Não publique chaves secretas de backend no GitHub. Chaves públicas/anon de serviços como Supabase só devem ser usadas junto com regras de segurança (RLS) corretamente configuradas.
+O projeto usa RLS na tabela `app_state`. A chave `sb_publishable_...` é pública por definição e pode estar no frontend. **Nunca** coloque `sb_secret_...`, `service_role`, senha do banco ou credenciais bancárias no GitHub.
