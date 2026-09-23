@@ -1,43 +1,21 @@
-# Meu Controle Financeiro — sincronizado
+# Meu Controle Financeiro — sincronização instantânea
 
-Site/PWA pessoal para entradas, saídas, Pix, dinheiro, cartões simplificados, limite, faturas, contas, vencimentos, gráficos e notificações.
+Versão preparada para uso em dois celulares com a mesma conta Supabase.
 
-## O que já está configurado
+## O que mudou nesta versão
 
-- Supabase conectado com a **Publishable key** do projeto (segura para uso no navegador com RLS).
-- Nada de `sb_secret`, `service_role`, senha de banco ou número real de cartão no código.
-- Dados locais continuam em `localStorage` como cache/offline.
-- Dados da conta são sincronizados com `public.app_state` no Supabase.
-- O app tenta atualizar entre aparelhos automaticamente a cada poucos segundos e também ao voltar para a tela.
-- PWA com manifest, service worker e ícones para adicionar à tela inicial.
+- Toda ação local é **otimista e imediata**: adicionar, excluir, pagar fatura, pagar conta, criar cartão etc. atualiza a tela na mesma hora, sem reload.
+- A gravação no Supabase acontece em segundo plano.
+- Os outros aparelhos recebem um sinal por **Supabase Realtime Broadcast** e puxam o estado novo automaticamente.
+- Existe um fallback de sincronização periódica caso o canal Realtime caia.
+- Foi corrigida uma condição de corrida: uma segunda alteração feita enquanto a primeira ainda estava sendo salva não é mais marcada por engano como sincronizada.
+- Abas abertas no mesmo navegador também se atualizam por `BroadcastChannel`.
+- O cache do PWA foi versionado para evitar ficar preso numa versão antiga do JavaScript.
 
-## Como usar em dois celulares
+## Publicar
 
-1. Publique esta pasta no GitHub Pages.
-2. Abra o link no primeiro celular.
-3. Crie uma conta no próprio app com e-mail e senha.
-4. Se o Supabase pedir confirmação de e-mail, confirme e volte ao app.
-5. No segundo celular, abra o mesmo link e **entre com o mesmo e-mail e senha**.
-6. Os dois aparelhos passam a usar o mesmo conjunto de dados.
+Suba todos os arquivos desta pasta para a raiz do repositório usado no GitHub Pages.
 
-> Esta versão usa um login compartilhado porque é a forma mais simples. No futuro dá para evoluir para duas contas diferentes ligadas à mesma carteira compartilhada.
+Não é necessário rodar SQL extra para o mecanismo principal de atualização ao vivo desta versão: ele usa Broadcast do Supabase para avisar os outros aparelhos e o RLS da tabela `app_state` continua protegendo a leitura/escrita.
 
-## Instalar como app
-
-No Android/Chrome, abra o site publicado e use **Adicionar à tela inicial / Instalar app**. O app abre em modo standalone, sem precisar de APK ou Play Store.
-
-## GitHub Pages
-
-Suba **todos** estes arquivos e pastas para o repositório. Depois vá em:
-
-`Settings -> Pages -> Deploy from a branch -> main / root`
-
-O GitHub fornecerá o link público.
-
-## Notificações
-
-O sino dentro do app mostra avisos de contas/faturas e limite. Notificações do aparelho podem ser ativadas pelo usuário. Avisos com o site completamente fechado exigiriam push/backend adicional; esta versão não depende disso.
-
-## Segurança
-
-O projeto usa RLS na tabela `app_state`. A chave `sb_publishable_...` é pública por definição e pode estar no frontend. **Nunca** coloque `sb_secret_...`, `service_role`, senha do banco ou credenciais bancárias no GitHub.
+Os dois celulares devem entrar com a mesma conta do app para compartilhar o mesmo estado financeiro.

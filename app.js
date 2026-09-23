@@ -4,7 +4,9 @@ const NOTIFIED_KEY='meu-controle-notified-v1';
 const SUPABASE_URL='https://qbvaltltzjmryemxvasm.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY='sb_publishable_2D_tPBDk171ltFsCaenQBg_LyiYmLmN';
 const supabaseClient=window.supabase?.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
-let cloudUser=null,cloudSaveTimer=null,cloudPollTimer=null,cloudChannel=null,lastCloudUpdatedAt='',lastLocalMutationAt=0,cloudDirty=false,cloudSaving=false;
+let cloudUser=null,cloudSaveTimer=null,cloudPollTimer=null,cloudChannel=null,lastCloudUpdatedAt='',lastLocalMutationAt=0,cloudDirty=false,cloudSaving=false,localRevision=0,remoteRefreshPending=false;
+const CLIENT_INSTANCE_ID=(crypto?.randomUUID?.()||String(Date.now()+Math.random()));
+const localTabChannel=('BroadcastChannel' in window)?new BroadcastChannel('meu-controle-local-sync-v1'):null;
 const categories=['Alimentação','Faculdade','Transporte','Lazer','Jogos','Casa','Contas','Saúde','Compras','Outros'];
 const brl=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'});
 const fmt=v=>brl.format((Number(v)||0)/100);
@@ -34,7 +36,16 @@ function load(){
   return blankState();
 }
 function persistLocal(){localStorage.setItem(KEY,JSON.stringify(state))}
-function save(){persistLocal();lastLocalMutationAt=Date.now();cloudDirty=true;renderAll();queueCloudSave();}
+function save(){
+  // Atualização otimista: a interface muda AGORA, sem esperar internet/Supabase.
+  persistLocal();
+  lastLocalMutationAt=Date.now();
+  localRevision++;
+  cloudDirty=true;
+  renderAll();
+  try{localTabChannel?.postMessage({type:'state',sender:CLIENT_INSTANCE_ID,state,revision:localRevision})}catch{}
+  queueCloudSave();
+}
 function setSyncStatus(mode,text){
   const el=document.querySelector('#syncStatus');if(!el)return;
   el.dataset.mode=mode;el.textContent=text||({online:'Sincronizado',syncing:'Sincronizando',offline:'Sem internet',error:'Falha ao sincronizar'}[mode]||'Nuvem');
@@ -49,33 +60,59 @@ async function pullCloudState(force=false){
     if(error)throw error;
     if(!data){await pushCloudState(true);return}
     const stamp=data.updated_at||'';
-    if(force||!lastCloudUpdatedAt||stamp>lastCloudUpdatedAt){state=normalizeState(data.data);persistLocal();lastCloudUpdatedAt=stamp;renderAll()}
+    if(force||!lastCloudUpdatedAt||stamp>lastCloudUpdatedAt){state=normalizeState(data.data);persistLocal();lastCloudUpdatedAt=stamp;renderAll();try{localTabChannel?.postMessage({type:'state',sender:CLIENT_INSTANCE_ID,state,remote:true})}catch{}}
     setSyncStatus('online','Sincronizado');
   }catch(err){console.error('Cloud pull failed',err);setSyncStatus(navigator.onLine?'error':'offline')}
+}
+async function announceCloudChange(){
+  if(!cloudChannel)return;
+  try{await cloudChannel.send({type:'broadcast',event:'state-changed',payload:{sender:CLIENT_INSTANCE_ID,updated_at:lastCloudUpdatedAt}})}catch{}
 }
 async function pushCloudState(force=false){
   if(!supabaseClient||!cloudUser||!navigator.onLine||cloudSaving)return;
   if(!force&&!cloudDirty)return;
+  const revisionAtStart=localRevision;
+  // Snapshot evita uma alteração feita durante o request ser marcada por engano como já sincronizada.
+  const snapshot=JSON.parse(JSON.stringify(state));
   cloudSaving=true;setSyncStatus('syncing','Sincronizando…');
   try{
-    const payload={user_id:cloudUser.id,data:state,updated_at:new Date().toISOString()};
+    const payload={user_id:cloudUser.id,data:snapshot,updated_at:new Date().toISOString()};
     const {data,error}=await supabaseClient.from('app_state').upsert(payload,{onConflict:'user_id'}).select('updated_at').single();
     if(error)throw error;
-    cloudDirty=false;lastCloudUpdatedAt=data?.updated_at||payload.updated_at;setSyncStatus('online','Sincronizado');
+    lastCloudUpdatedAt=data?.updated_at||payload.updated_at;
+    cloudDirty=localRevision!==revisionAtStart;
+    setSyncStatus('online',cloudDirty?'Salvando nova alteração…':'Sincronizado');
+    await announceCloudChange();
   }catch(err){console.error('Cloud save failed',err);cloudDirty=true;setSyncStatus(navigator.onLine?'error':'offline')}
-  finally{cloudSaving=false}
+  finally{
+    cloudSaving=false;
+    if(cloudDirty)queueCloudSave(40);
+    else if(remoteRefreshPending){remoteRefreshPending=false;setTimeout(()=>pullCloudState(true),60)}
+  }
 }
-function queueCloudSave(){clearTimeout(cloudSaveTimer);cloudSaveTimer=setTimeout(()=>pushCloudState(),350)}
+function queueCloudSave(delay=90){clearTimeout(cloudSaveTimer);cloudSaveTimer=setTimeout(()=>pushCloudState(),delay)}
 function stopCloudSync(){clearInterval(cloudPollTimer);cloudPollTimer=null;if(cloudChannel&&supabaseClient){supabaseClient.removeChannel(cloudChannel).catch(()=>{});cloudChannel=null}}
 function startCloudSync(){
   stopCloudSync();
-  cloudPollTimer=setInterval(()=>{if(cloudDirty)pushCloudState();else pullCloudState()},5000);
+  // Fallback raro. A sincronização normal acontece via Realtime Broadcast imediatamente.
+  cloudPollTimer=setInterval(()=>{if(cloudDirty)pushCloudState();else pullCloudState()},20000);
   try{
-    cloudChannel=supabaseClient.channel(`app-state-${cloudUser.id}`).on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_state',filter:`user_id=eq.${cloudUser.id}`},payload=>{
-      const stamp=payload.new?.updated_at||'';
-      if(stamp&&stamp!==lastCloudUpdatedAt&&!cloudDirty&&Date.now()-lastLocalMutationAt>800){state=normalizeState(payload.new.data);lastCloudUpdatedAt=stamp;persistLocal();renderAll();setSyncStatus('online','Atualizado')}
-    }).subscribe();
-  }catch{}
+    cloudChannel=supabaseClient
+      .channel(`app-state-live-${cloudUser.id}`,{config:{broadcast:{self:false}}})
+      .on('broadcast',{event:'state-changed'},()=>{
+        if(cloudDirty||cloudSaving){remoteRefreshPending=true;return}
+        pullCloudState(true);
+      })
+      // Se o projeto também estiver com Postgres Changes habilitado, aproveita sem depender dele.
+      .on('postgres_changes',{event:'*',schema:'public',table:'app_state',filter:`user_id=eq.${cloudUser.id}`},payload=>{
+        const stamp=payload.new?.updated_at||'';
+        if(!stamp||stamp===lastCloudUpdatedAt)return;
+        if(cloudDirty||cloudSaving){remoteRefreshPending=true;return}
+        if(payload.new?.data){state=normalizeState(payload.new.data);lastCloudUpdatedAt=stamp;persistLocal();renderAll();setSyncStatus('online','Atualizado agora')}
+        else pullCloudState(true);
+      })
+      .subscribe(status=>{if(status==='SUBSCRIBED')setSyncStatus('online','Sincronizado ao vivo')});
+  }catch(err){console.warn('Realtime indisponível; usando fallback.',err)}
 }
 async function loadCloudForUser(user){
   cloudUser=user;showAuthGate(false);document.querySelector('#accountBtn')?.classList.remove('hidden');
@@ -84,7 +121,7 @@ async function loadCloudForUser(user){
   try{
     const {data,error}=await supabaseClient.from('app_state').select('data,updated_at').eq('user_id',user.id).maybeSingle();
     if(error)throw error;
-    if(data){state=normalizeState(data.data);lastCloudUpdatedAt=data.updated_at||'';cloudDirty=false;persistLocal();renderAll()}
+    if(data){state=normalizeState(data.data);lastCloudUpdatedAt=data.updated_at||'';cloudDirty=false;localRevision=0;persistLocal();renderAll()}
     else{cloudDirty=true;await pushCloudState(true)}
     startCloudSync();setSyncStatus('online','Sincronizado');
   }catch(err){console.error(err);setSyncStatus('error','Erro na nuvem');toast('Não consegui carregar a nuvem agora. Seus dados locais continuam salvos.')}
@@ -95,6 +132,15 @@ async function initCloud(){
   if(session?.user)await loadCloudForUser(session.user);else{showAuthGate(true);setSyncStatus('offline','Entrar para sincronizar')}
   supabaseClient.auth.onAuthStateChange((_event,session)=>{if(session?.user&&session.user.id!==cloudUser?.id)loadCloudForUser(session.user);if(!session?.user){cloudUser=null;stopCloudSync();showAuthGate(true);document.querySelector('#accountBtn')?.classList.add('hidden');setSyncStatus('offline','Entrar para sincronizar')}})
 }
+if(localTabChannel){
+  localTabChannel.onmessage=e=>{
+    const msg=e.data||{};
+    if(msg.sender===CLIENT_INSTANCE_ID||msg.type!=='state'||!msg.state)return;
+    if(cloudDirty||cloudSaving)return;
+    state=normalizeState(msg.state);persistLocal();renderAll();
+  };
+}
+
 async function signIn(){
   const email=document.querySelector('#authEmail').value.trim(),password=document.querySelector('#authPassword').value;
   if(!email||!password)return setAuthMessage('Digite e-mail e senha.',true);
@@ -281,10 +327,10 @@ function closeDialogs(){document.querySelectorAll('dialog[open]').forEach(d=>d.c
 function closeSheet(){quickSheet.classList.add('hidden');sheetBackdrop.classList.add('hidden')}
 function openSheet(){quickSheet.classList.remove('hidden');sheetBackdrop.classList.remove('hidden')}
 
-entryForm.addEventListener('submit',e=>{e.preventDefault();const type=entryType.value,amount=parseMoney(entryAmount.value),desc=entryDescription.value.trim();if(!amount||!desc)return toast('Preencha valor e descrição.');const base={id:uid(),type,amount,description:desc,date:entryDate.value};if(type==='expense'){base.payment=document.querySelector('#paymentOptions .active')?.dataset.payment||'Pix';base.category=entryCategory.value;if(base.payment==='Cartão'){if(!entryCard.value)return toast('Crie ou escolha um cartão.');base.cardId=entryCard.value}const n=installmentToggle.checked?Number(installmentCount.value):1;if(n>1){const part=Math.floor(amount/n),rem=amount-part*n;for(let i=0;i<n;i++){const d=toDate(base.date);d.setMonth(d.getMonth()+i);state.transactions.push({...base,id:uid(),amount:part+(i<rem?1:0),description:`${desc} ${i+1}/${n}`,date:d.toISOString().slice(0,10),installment:{index:i+1,total:n}})}save();entryDialog.close();return toast('Compra parcelada adicionada.')}}state.transactions.push(base);save();entryDialog.close();toast(type==='income'?'Entrada adicionada.':'Gasto adicionado.')});
+entryForm.addEventListener('submit',e=>{e.preventDefault();const type=entryType.value,amount=parseMoney(entryAmount.value),desc=entryDescription.value.trim();if(!amount||!desc)return toast('Preencha valor e descrição.');const base={id:uid(),type,amount,description:desc,date:entryDate.value};if(type==='expense'){base.payment=document.querySelector('#paymentOptions .active')?.dataset.payment||'Pix';base.category=entryCategory.value;if(base.payment==='Cartão'){if(!entryCard.value)return toast('Crie ou escolha um cartão.');base.cardId=entryCard.value}const n=installmentToggle.checked?Number(installmentCount.value):1;if(n>1){const part=Math.floor(amount/n),rem=amount-part*n;for(let i=0;i<n;i++){const d=toDate(base.date);d.setMonth(d.getMonth()+i);state.transactions.push({...base,id:uid(),amount:part+(i<rem?1:0),description:`${desc} ${i+1}/${n}`,date:d.toISOString().slice(0,10),installment:{index:i+1,total:n}})}entryDialog.close();save();return toast('Compra parcelada adicionada.')}}state.transactions.push(base);entryDialog.close();save();toast(type==='income'?'Entrada adicionada.':'Gasto adicionado.')});
 
-billForm.addEventListener('submit',e=>{e.preventDefault();const amount=parseMoney(billAmount.value),description=billDescription.value.trim();if(!amount||!description)return toast('Preencha valor e descrição.');state.bills.push({id:uid(),amount,description,dueDate:billDueDate.value,recurring:billRecurring.checked,paid:false});save();billDialog.close();billForm.reset();toast('Conta adicionada.')});
-cardForm.addEventListener('submit',e=>{e.preventDefault();state.cards.push({id:uid(),name:cardName.value.trim(),limit:parseMoney(cardLimit.value),closeDay:Number(cardCloseDay.value),dueDay:Number(cardDueDay.value)});save();cardDialog.close();cardForm.reset();toast('Cartão adicionado.')});
+billForm.addEventListener('submit',e=>{e.preventDefault();const amount=parseMoney(billAmount.value),description=billDescription.value.trim();if(!amount||!description)return toast('Preencha valor e descrição.');state.bills.push({id:uid(),amount,description,dueDate:billDueDate.value,recurring:billRecurring.checked,paid:false});billDialog.close();save();billForm.reset();toast('Conta adicionada.')});
+cardForm.addEventListener('submit',e=>{e.preventDefault();state.cards.push({id:uid(),name:cardName.value.trim(),limit:parseMoney(cardLimit.value),closeDay:Number(cardCloseDay.value),dueDay:Number(cardDueDay.value)});cardDialog.close();save();cardForm.reset();toast('Cartão adicionado.')});
 
 function showTransaction(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;editTitle.textContent=t.description;editBody.innerHTML=`<div class="detail-grid"><div class="detail-box"><span>Valor</span><strong class="${t.type==='income'?'positive':'negative'}">${t.type==='income'?'+':'−'} ${fmt(t.amount)}</strong></div><div class="detail-box"><span>Data</span><strong>${shortDate(t.date)}</strong></div>${t.type==='expense'?`<div class="detail-box"><span>Pagamento</span><strong>${esc(t.payment||'Outro')}</strong></div><div class="detail-box"><span>Categoria</span><strong>${esc(t.category||'Sem categoria')}</strong></div>`:''}</div><div class="modal-actions"><button class="danger-btn" data-delete-tx="${id}">Excluir</button></div>`;editDialog.showModal()}
 
@@ -294,7 +340,7 @@ function showBill(id){const b=state.bills.find(x=>x.id===id);if(!b)return;editTi
 
 function switchView(name){document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));document.querySelector(`#view-${name}`).classList.add('active');document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===name));viewTitle.textContent={home:'Meu dinheiro',history:'Histórico',cards:'Cartões',bills:'Contas',calendar:'Calendário'}[name]||'Meu dinheiro';window.scrollTo({top:0,behavior:'smooth'})}
 
-document.addEventListener('click',e=>{const open=e.target.closest('[data-open]');if(open){const type=open.dataset.open;if(type==='expense'||type==='income')openEntry(type);if(type==='bill'){closeSheet();billDueDate.value=today();billDialog.showModal()}return}const v=e.target.closest('[data-view]');if(v){switchView(v.dataset.view);return}if(e.target.closest('[data-close]')){closeDialogs();return}const tx=e.target.closest('[data-tx]');if(tx){showTransaction(tx.dataset.tx);return}const bl=e.target.closest('[data-bill]');if(bl){showBill(bl.dataset.bill);return}const cc=e.target.closest('[data-card]');if(cc){showCard(cc.dataset.card);return}if(e.target.matches('[data-delete-tx]')){if(confirm('Excluir este registro?')){state.transactions=state.transactions.filter(x=>x.id!==e.target.dataset.deleteTx);save();editDialog.close();toast('Registro excluído.')}return}if(e.target.matches('[data-pay-invoice]')){const key=invoiceKey(e.target.dataset.payInvoice,e.target.dataset.due);if(!state.paidInvoices.includes(key))state.paidInvoices.push(key);save();editDialog.close();toast('Fatura marcada como paga.');return}if(e.target.matches('[data-delete-card]')){if(confirm('Excluir este cartão? As movimentações ficam no histórico.')){state.cards=state.cards.filter(x=>x.id!==e.target.dataset.deleteCard);save();editDialog.close();toast('Cartão excluído.')}return}if(e.target.matches('[data-delete-bill]')){if(confirm('Excluir esta conta?')){state.bills=state.bills.filter(x=>x.id!==e.target.dataset.deleteBill);save();editDialog.close();toast('Conta excluída.')}return}if(e.target.matches('[data-pay-bill]')){const b=state.bills.find(x=>x.id===e.target.dataset.payBill);if(b){b.paid=true;save();editDialog.close();toast('Conta marcada como paga.')}return}});
+document.addEventListener('click',e=>{const open=e.target.closest('[data-open]');if(open){const type=open.dataset.open;if(type==='expense'||type==='income')openEntry(type);if(type==='bill'){closeSheet();billDueDate.value=today();billDialog.showModal()}return}const v=e.target.closest('[data-view]');if(v){switchView(v.dataset.view);return}if(e.target.closest('[data-close]')){closeDialogs();return}const tx=e.target.closest('[data-tx]');if(tx){showTransaction(tx.dataset.tx);return}const bl=e.target.closest('[data-bill]');if(bl){showBill(bl.dataset.bill);return}const cc=e.target.closest('[data-card]');if(cc){showCard(cc.dataset.card);return}if(e.target.matches('[data-delete-tx]')){if(confirm('Excluir este registro?')){state.transactions=state.transactions.filter(x=>x.id!==e.target.dataset.deleteTx);editDialog.close();save();toast('Registro excluído.')}return}if(e.target.matches('[data-pay-invoice]')){const key=invoiceKey(e.target.dataset.payInvoice,e.target.dataset.due);if(!state.paidInvoices.includes(key))state.paidInvoices.push(key);editDialog.close();save();toast('Fatura marcada como paga.');return}if(e.target.matches('[data-delete-card]')){if(confirm('Excluir este cartão? As movimentações ficam no histórico.')){state.cards=state.cards.filter(x=>x.id!==e.target.dataset.deleteCard);editDialog.close();save();toast('Cartão excluído.')}return}if(e.target.matches('[data-delete-bill]')){if(confirm('Excluir esta conta?')){state.bills=state.bills.filter(x=>x.id!==e.target.dataset.deleteBill);editDialog.close();save();toast('Conta excluída.')}return}if(e.target.matches('[data-pay-bill]')){const b=state.bills.find(x=>x.id===e.target.dataset.payBill);if(b){b.paid=true;editDialog.close();save();toast('Conta marcada como paga.')}return}});
 
 fab.addEventListener('click',openSheet);quickAddTop.addEventListener('click',openSheet);sheetBackdrop.addEventListener('click',closeSheet);addCardBtn.addEventListener('click',()=>cardDialog.showModal());
 notificationsBtn.addEventListener('click',()=>{renderNotifications();notificationsDialog.showModal()});
@@ -315,7 +361,7 @@ installmentToggle.addEventListener('change',()=>installmentWrap.classList.toggle
 prevMonth.addEventListener('click',()=>{calendarCursor.setMonth(calendarCursor.getMonth()-1);renderCalendar()});nextMonth.addEventListener('click',()=>{calendarCursor.setMonth(calendarCursor.getMonth()+1);renderCalendar()});
 resetDemo.addEventListener('click',()=>{if(confirm('Limpar todos os dados sincronizados desta conta?')){state=blankState();save();toast('Dados apagados.')}});
 window.addEventListener('resize',()=>{clearTimeout(window.__chartTimer);window.__chartTimer=setTimeout(drawCharts,120)});
-if('serviceWorker' in navigator){navigator.serviceWorker.register('./service-worker.js').catch(()=>{});}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('./service-worker.js').then(reg=>reg.update()).catch(()=>{});}
 
 renderAll();
 initCloud();
